@@ -1,0 +1,5 @@
+School_reopening_comm.m generates all figures that pertain to the linked SEIR model of adults and children 
+in contact in schools and in the community.
+
+Fwd_contact_tracing.Rmd runs the statistical model combining dispersion and symptomatic status to estimate 
+the percent of all index cases expected to transmit to one or more symptomatic individual
