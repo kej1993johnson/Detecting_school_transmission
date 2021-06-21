@@ -1,0 +1,148 @@
+---
+title: "Fwd_contact_tracing"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warnings=FALSE, out.width='1000px', dpi=300, message=FALSE)
+rm(list=ls())
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(reshape2)
+library(cowplot)
+library(knitr)
+library(forcats)
+library(bigsnpr)
+library(RColorBrewer)
+```
+If we assume that an index case in a school has a chance of transmitting at all that is characterized by over dispersion (which follows a negative binomial distribution with parameter k=0.1) coupled with if they transmit, then they only show symptoms with a probability of 21% (which follows a binomial distribution) we can get the distribution of expected observed transmissions through forward contact_tracing
+```{r}
+# Distribution of number of secondary infections if each case has N contacts
+n_cases<-200
+R0<-1.1
+n_contacts_per_case<-10 # This needs to be high enough to ensure upper bound of number infected is incorporated
+n_traced<-n_cases*n_contacts_per_case
+k <-0.1
+n_runs<-20
+#How many people does the index case transmit to?
+mu = R0
+n_transmissions_per_case<-rnbinom(n=n_cases, mu= R0, size = k)
+hist(n_transmissions_per_case)
+# On average how many secondary infections are there? (should be ~2.5)
+mean_secondary_inf<-sum(n_transmissions_per_case)/n_cases
+mean_prob_of_transmission_per_contact<- 100*sum(n_transmissions_per_case)/n_traced
+prob_of_transmission_per_contact<-100*n_transmissions_per_case/n_contacts_per_case
+hist(prob_of_transmission_per_contact, br=seq(-0.5,max(prob_of_transmission_per_contact+1),by=1) )
+
+#What % of cases transmit onwards?
+pct_cases_that_transmit<-100*sum(n_transmissions_per_case>0)/n_cases
+
+# From those that get infected, how many show symptoms (i.e. how many would be detected transmissions)?
+pct_symptomatic = 0.21
+n_symptoms_per_case<-rbinom(n = n_cases, size = n_transmissions_per_case, prob = pct_symptomatic)
+hist(n_symptoms_per_case, breaks = 25)
+expected_number_with_symptoms_per_case    <-    sum(n_symptoms_per_case)/n_cases
+mean_prob_of_symptoms_per_contact         <-100*sum(n_symptoms_per_case)/n_traced
+prob_of_detecting_transmission_per_contact<-100*    n_symptoms_per_case /n_contacts_per_case
+hist(prob_of_detecting_transmission_per_contact, breaks = 25)
+
+ # What % of cases transmit onwards AND that transmission is detected?
+pct_cases_that_transmission_detected<-100*sum(n_symptoms_per_case>0)/n_cases
+
+```
+Write a function that takes as an input k, n_contacts, % symptomatic, and R0 and spits out the chance of observing a transmission (symptomatic to symptomatic) per case and per contact
+```{r}
+forward_tracing<-function(k, n_contacts_per_case, R0, pct_symptomatic){
+  n_cases<-200
+  n_traced<-n_cases*n_contacts_per_case
+  mu = R0
+  #How many people does the index case transmit to?
+  n_transmissions_per_case<-rnbinom(n=n_cases, mu= R0, size = k)
+  mean_prob_of_transmission_per_contact<- 100*sum(n_transmissions_per_case)/n_traced
+  prob_of_transmission_per_contact<-100*n_transmissions_per_case/n_contacts_per_case
+  # What % of cases transmit onwards?
+  pct_cases_that_transmit<-100*sum(n_transmissions_per_case>1)/n_cases
+
+ # How many of these would be detected?
+  n_symptoms_per_case<-rbinom(n = n_cases, size = n_transmissions_per_case, prob = pct_symptomatic)
+  
+  # What % of cases transmit onwards AND that transmission is detected?
+  pct_cases_that_transmission_detected<-100*sum(n_symptoms_per_case>0)/n_cases
+  
+  expected_number_with_symptoms_per_case    <-    sum(n_symptoms_per_case)/n_cases
+  mean_prob_of_symptoms_per_contact         <-100*sum(n_symptoms_per_case)/n_traced
+  
+  
+  
+  output<-c(pct_cases_that_transmit, pct_cases_that_transmission_detected, mean_prob_of_symptoms_per_contact)
+  return(output)
+  
+}
+
+linspace <- function(x1, x2, n=100) {
+  stopifnot(is.numeric(x1), is.numeric(x2), length(x1)==1, length(x2)==1)
+  n <- floor(n)
+  if (n <= 1) x2
+  else seq(x1, x2, length.out=n)
+}
+
+#replicate(1000, get_percent_symptomatic(2.5, 0.1, 0.21, 20)) %>% quantile(probs = c(0.025, 0.5, 0.975))
+```
+
+Pick 3 k values and vary percent symptomatic, find pct of cases with detected transmission
+```{r}
+psymvec<-linspace(0, 1, n=19)
+R0<-2.5
+kvec<-c(0.05, 0.1, 0.2) # 95% CI from Endo et al
+nsamps<-1000
+
+for (i in 1:length(kvec)){
+  k<-kvec[i]
+  ks<-rep(k, length(psymvec))
+  pct_det_transmission_med<-rep(0, length(psymvec))
+  pct_det_transmission_lb<-rep(0, length(psymvec))
+  pct_det_transmission_ub<-rep(0, length(psymvec))
+  for(j in 1:length(psymvec)){
+    pct_symptomatic<-psymvec[j]
+    pct_det<-rep(0, nsamps)
+    for (m in 1:nsamps){
+    out<-forward_tracing(k, n_contacts_per_case, R0, pct_symptomatic)
+    pct_det[m]<- out[2]
+    }
+    pct_det_transmission_med[j]<-as.numeric(quantile(pct_det, 0.5))
+    pct_det_transmission_lb[j]<-as.numeric(quantile(pct_det, 0.025))
+    pct_det_transmission_ub[j]<-as.numeric(quantile(pct_det, 0.975))
+  }
+  if(i==1){
+    df<- data.frame(psymvec,ks, pct_det_transmission_med, pct_det_transmission_lb,pct_det_transmission_ub)
+  }
+  else{
+    dfi<- data.frame(psymvec,ks, pct_det_transmission_med, pct_det_transmission_lb,pct_det_transmission_ub)
+    df<-rbind(df,dfi)
+  }
+  
+}
+```
+```{r}
+wd<-getwd()
+path =paste0(wd,"/fwd_tracing.png")
+plt<-ggplot(df) + geom_line(aes(x = 100*psymvec, y = pct_det_transmission_med, color = factor(ks)))  + scale_color_brewer(palette = "Set2")+
+  geom_ribbon(aes(x = 100*psymvec, ymin = pct_det_transmission_lb, ymax = pct_det_transmission_ub, fill= factor(ks)), alpha = 0.1)+ scale_color_brewer(palette = "Set2") + scale_fill_brewer(palette = "Set2") + geom_vline(xintercept = 21, linetype = "dashed") + geom_vline(xintercept = 70) + xlab('Percent symptomatic') + ylab('% of index cases with detected transmission') +  theme(legend.position = "right") + coord_cartesian(ylim = c(0, 50))
+# geom_point(x = 0.21, y = 2.6, shape = "*", size = 6)+
+plt
+ggsave(filename = path, device = "png", dpi = 1000, width = 7, height = 5, units="in")
+k = 0.1
+# Children scenario
+pct_det<-rep(0, nsamps)
+    for (m in 1:nsamps){
+    out<-forward_tracing(k, n_contacts_per_case, R0, 0.21)
+    pct_det[m]<- out[2]
+    }
+    pct_det_transmission_med<-as.numeric(quantile(pct_det, 0.5))
+    pct_det_transmission_lb<-as.numeric(quantile(pct_det, 0.025))
+    pct_det_transmission_ub<-as.numeric(quantile(pct_det, 0.975))
+```
+
+
+
